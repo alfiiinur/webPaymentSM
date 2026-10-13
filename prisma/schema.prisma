@@ -1,0 +1,149 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  FAILED
+  CANCELLED
+  EXPIRED
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  CANCELLED
+  EXPIRED
+}
+
+enum AccountStatus {
+  PENDING_ACTIVATION
+  ACTIVE
+  DISABLED
+}
+
+enum CredentialStatus {
+  AVAILABLE  // belum dipakai, siap di-assign
+  USED       // sudah di-assign ke buyer
+  INACTIVE   // admin nonaktifkan (akun expired / dicabut)
+}
+
+model Store {
+  id        String    @id @default(cuid())
+  name      String
+  slug      String    @unique
+  products  Product[]
+  orders    Order[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}
+
+model Product {
+  id                String               @id @default(cuid())
+  storeId           String
+  store             Store                @relation(fields: [storeId], references: [id])
+  name              String
+  packageType       String
+  duration          Int
+  durationUnit      String
+  price             Int // in Rupiah, integer, no decimals
+  isActive          Boolean              @default(true)
+  orders            Order[]
+  productAccess     ProductAccess[]
+  productCredentials ProductCredential[]
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+}
+
+model Order {
+  id              String          @id @default(cuid())
+  orderNumber     String          @unique // format: INV-XXXX
+  status          OrderStatus     @default(PENDING)
+  productId       String
+  product         Product         @relation(fields: [productId], references: [id])
+  storeId         String
+  store           Store           @relation(fields: [storeId], references: [id])
+  customerName    String
+  customerEmail   String
+  note            String?
+  activationToken String? // raw activation token — cleared after account becomes ACTIVE
+  payment         Payment?
+  productAccess   ProductAccess[]
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+}
+
+model Payment {
+  id                String        @id @default(cuid())
+  orderId           String        @unique
+  order             Order         @relation(fields: [orderId], references: [id])
+  status            PaymentStatus @default(PENDING)
+  amount            Int // in Rupiah
+  paymentMethod     String        @default("QRIS")
+  providerPaymentId String? // order_id sent to Midtrans
+  snapToken         String?
+  paymentUrl        String?
+  paidAt            DateTime?
+  paymentReference  String? // Midtrans transaction_id
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+}
+
+model Account {
+  id                  String          @id @default(cuid())
+  email               String          @unique
+  passwordHash        String? // null until account is activated
+  status              AccountStatus   @default(PENDING_ACTIVATION)
+  activationTokenHash String? // SHA256 hash of the raw activation token
+  activationExpiresAt DateTime?
+  productAccess       ProductAccess[]
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+}
+
+model ProductAccess {
+  id           String             @id @default(cuid())
+  accountId    String
+  account      Account            @relation(fields: [accountId], references: [id])
+  productId    String
+  product      Product            @relation(fields: [productId], references: [id])
+  orderId      String
+  order        Order              @relation(fields: [orderId], references: [id])
+  credentialId String?            // null jika credential belum di-assign
+  credential   ProductCredential? @relation(name: "CurrentCredential", fields: [credentialId], references: [id])
+  // Riwayat penggantian — diisi ketika credential diganti karena bermasalah
+  replacedCredentialId String?
+  replacedCredential   ProductCredential? @relation(name: "ReplacedCredential", fields: [replacedCredentialId], references: [id])
+  replacedAt           DateTime?          // kapan terakhir credential diganti
+  hasWarranty          Boolean            @default(false) // admin bisa aktifkan garansi per-user
+  grantedAt            DateTime           @default(now())
+
+  @@unique([accountId, productId, orderId])
+}
+
+// Credential akun digital milik penjual (email+password Netflix, Spotify, dll)
+model ProductCredential {
+  id            String           @id @default(cuid())
+  productId     String
+  product       Product          @relation(fields: [productId], references: [id])
+  email         String           // email akun digital
+  password      String           // password akun digital
+  notes         String?          // catatan opsional (misal: "slot 1", pin, dll)
+  status        CredentialStatus @default(AVAILABLE)
+  maxSlots      Int              @default(1)  // kapasitas maks user per credential
+  usedSlots     Int              @default(0)  // jumlah slot yang sudah terpakai
+  hasWarranty   Boolean          @default(false) // apakah credential ini punya garansi penggantian
+  // Relasi balik dari ProductAccess
+  productAccess         ProductAccess[] @relation(name: "CurrentCredential")
+  replacedInAccess      ProductAccess[] @relation(name: "ReplacedCredential")
+  assignedAt    DateTime?        // kapan pertama kali di-assign ke buyer
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+}
